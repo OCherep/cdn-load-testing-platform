@@ -30,3 +30,24 @@ type TestState struct {
 
 	SLABreached bool `json:"sla_breached"`
 }
+
+type SLAConfig struct {
+	LatencyMs  float64 `json:"latency_ms"`
+	ErrorRate  float64 `json:"error_rate"`
+	Stickiness float64 `json:"stickiness"`
+}
+
+type TestState struct {
+	TestID string `json:"test_id"`
+	Status string `json:"status"`
+
+	StartedAt int64 `json:"started_at"`
+	TTL       int64 `json:"ttl"`
+
+	ChaosSchedule chaos.Schedule `json:"chaos_schedule"`
+	SLA           SLAConfig      `json:"sla"`
+
+	SlaViolated  bool   `json:"sla_violated"`
+	ViolationAt  int64  `json:"violation_at,omitempty"`
+	ViolationMsg string `json:"violation_msg,omitempty"`
+}

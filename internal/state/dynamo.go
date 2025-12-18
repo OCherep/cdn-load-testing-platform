@@ -77,3 +77,27 @@ func atoi64(v types.AttributeValue) int64 {
 	n, _ := strconv.ParseInt(v.(*types.AttributeValueMemberN).Value, 10, 64)
 	return n
 }
+
+func (s *DynamoStore) MarkSLAViolation(
+	ctx context.Context,
+	testID string,
+	reason string,
+) error {
+
+	_, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(s.table),
+		Key: map[string]types.AttributeValue{
+			"test_id": &types.AttributeValueMemberS{Value: testID},
+		},
+		UpdateExpression: aws.String(
+			"SET sla_violated = :v, violation_at = :t, violation_msg = :m",
+		),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":v": &types.AttributeValueMemberBOOL{Value: true},
+			":t": &types.AttributeValueMemberN{Value: strconv.FormatInt(time.Now().Unix(), 10)},
+			":m": &types.AttributeValueMemberS{Value: reason},
+		},
+	})
+
+	return err
+}

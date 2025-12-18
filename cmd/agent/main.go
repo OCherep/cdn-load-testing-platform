@@ -115,6 +115,21 @@ func main() {
 			continue
 		}
 
+		violated, reason := load.CheckSLA(load.SLA{
+			LatencyMs:  currentTestState.SLA.LatencyMs,
+			ErrorRate:  currentTestState.SLA.ErrorRate,
+			Stickiness: currentTestState.SLA.Stickiness,
+		})
+
+		if violated {
+			stateStore.MarkSLAViolation(
+				context.Background(),
+				testID,
+				reason,
+			)
+			log.Println("[SLA] VIOLATED:", reason)
+		}
+
 		interval := time.Second / time.Duration(rps)
 
 		for i := 0; i < rps; i++ {
@@ -159,9 +174,14 @@ func executeRequest(
 	/*
 		CHAOS
 	*/
-	chaosMu.RLock()
-	err = chaos.Apply(currentChaos)
-	chaosMu.RUnlock()
+	testStateMu.RLock()
+	cfg := resolveChaos(currentTestState)
+	testStateMu.RUnlock()
+
+	if err := chaos.Apply(cfg); err != nil {
+		metrics.RecordError(region)
+		return
+	}
 
 	if err != nil {
 		metrics.RecordError(region)
@@ -219,4 +239,21 @@ func refreshTestState(store *state.DynamoStore, testID string) {
 
 		time.Sleep(5 * time.Second)
 	}
+}
+
+func resolveChaos(test *state.TestState) chaos.Config {
+	if test == nil {
+		return chaos.Config{}
+	}
+
+	cfg := test.ChaosSchedule.Active(
+		time.Now(),
+		time.Unix(test.StartedAt, 0),
+	)
+
+	if cfg == nil {
+		return chaos.Config{}
+	}
+
+	return *cfg
 }
