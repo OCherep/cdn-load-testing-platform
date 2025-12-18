@@ -84,14 +84,17 @@ cd "$ROOT_DIR"
 ### ================================
 ### GRAFANA
 ### ================================
-echo "📊 Starting Grafana..."
+echo "📊 Starting Grafana with provisioning..."
 
 docker rm -f grafana-cdn-load >/dev/null 2>&1 || true
 
 docker run -d \
   --name grafana-cdn-load \
   -p 3000:3000 \
+  -v "$ROOT_DIR/grafana/provisioning:/etc/grafana/provisioning" \
+  -v "$ROOT_DIR/grafana/dashboards:/var/lib/grafana/dashboards" \
   grafana/grafana:latest
+
 
 echo
 echo "======================================"

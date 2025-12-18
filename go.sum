@@ -1,0 +1,7 @@
+github.com/aws/aws-sdk-go-v2 v1.25.1/go.mod h1:Evoc5AsmtveRt1komDwIsjHFyrP5tDuF1D1U+6z6pNo=
+github.com/aws/aws-sdk-go-v2/config v1.27.0/go.mod h1:cfh8v69nuSUohNFMbIISP2fhmblGmYEOKs5V53HiHnk=
+github.com/aws/aws-sdk-go-v2/service/s3 v1.51.0/go.mod h1:lTW7O4iMAnO2o7H3XJTvqaWFZCH6zIPs+eP7RdG/yp0=
+github.com/aws/aws-sdk-go-v2/service/ssm v1.45.0/go.mod h1:Q7XIWsMo0JcMpI/6TGD6XXcXcV1DbTj6e9BKNntIMIM=
+github.com/gin-gonic/gin v1.10.0/go.mod h1:4PMNQiOhvDRa013RKVbsiNwoyezlm2rm0uX/T7kzp5Y=
+github.com/golang-jwt/jwt/v5 v5.2.0/go.mod h1:pqrtFR0X4osieyHYxtmOUWsAWrfe1Q5UVIyoH402zdk=
+github.com/prometheus/client_golang v1.18.0/go.mod h1:T+GXkCk5wSJyOqMIzVgvvjFDlkOQntgjkJWKrN5txjA=

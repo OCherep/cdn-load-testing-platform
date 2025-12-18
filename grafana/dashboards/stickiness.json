@@ -1,0 +1,17 @@
+{
+  "title": "CDN Stickiness",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Stickiness Ratio",
+      "targets": [
+        {
+          "expr": "cdn_stickiness_ratio",
+          "legendFormat": "stickiness"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 37,
+  "version": 1
+}

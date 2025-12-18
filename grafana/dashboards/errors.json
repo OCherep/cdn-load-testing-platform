@@ -1,0 +1,17 @@
+{
+  "title": "CDN Errors",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Errors per Region",
+      "targets": [
+        {
+          "expr": "rate(cdn_errors_total[1m])",
+          "legendFormat": "{{region}}"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 37,
+  "version": 1
+}

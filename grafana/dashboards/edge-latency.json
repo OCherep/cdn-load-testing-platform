@@ -1,0 +1,17 @@
+{
+  "title": "CDN Edge Latency",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Latency per Edge (ms)",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(cdn_latency_ms_bucket[1m])) by (le, edge))",
+          "legendFormat": "{{edge}}"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 37,
+  "version": 1
+}
