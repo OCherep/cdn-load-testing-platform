@@ -80,14 +80,19 @@ func main() {
 		}
 
 		store.PutTest(state.TestState{
-			TestID:          id,
-			Status:          "created",
-			ProfileKey:      req.ProfileKey,
-			Nodes:           req.Nodes,
-			Sessions:        req.Sessions,
-			StartedAt:       time.Now().Unix(),
-			TTL:             req.DurationSec,
-			CostEstimateUSD: costUSD,
+			TestID:     id,
+			Status:     "CREATED",
+			ProfileKey: req.ProfileKey,
+			Nodes:      req.Nodes,
+			Sessions:   req.Sessions,
+			DesiredRPS: 100,
+			StartedAt:  time.Now().Unix(),
+			TTL:        3600,
+			SLA: state.SLAConfig{
+				LatencyMs:  200,
+				ErrorRate:  0.01,
+				Stickiness: 0.90,
+			},
 		})
 
 		c.JSON(201, gin.H{
