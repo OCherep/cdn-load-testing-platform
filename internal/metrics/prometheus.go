@@ -7,6 +7,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+var Stickiness = prometheus.NewGauge(
+	prometheus.GaugeOpts{
+		Name: "cdn_stickiness_ratio",
+		Help: "Edge stickiness ratio",
+	},
+)
+
+func RecordStickiness(ratio float64) {
+	Stickiness.Set(ratio)
+}
+
 var (
 	RequestLatency = prometheus.NewHistogram(
 		prometheus.HistogramOpts{

@@ -19,7 +19,7 @@ import (
 GLOBAL STATE
 */
 var (
-	currentChaos chaos.Config
+	CurrentChaos chaos.Config
 	chaosMu      sync.RWMutex
 
 	currentTestState *state.TestState
@@ -166,14 +166,10 @@ func executeRequest(
 		return
 	}
 
-	/*
-		GEO SIMULATION
-	*/
+	// GEO SIMULATION
 	geo.Apply(region)
 
-	/*
-		CHAOS
-	*/
+	// CHAOS
 	testStateMu.RLock()
 	cfg := resolveChaos(currentTestState)
 	testStateMu.RUnlock()
@@ -183,36 +179,37 @@ func executeRequest(
 		return
 	}
 
-	if err != nil {
-		metrics.RecordError(region)
-		return
-	}
+	// Застосовуємо розподіл по гео для цього запиту
+	targetRegion := geo.Pick(profile.GeoDistribution)
+	geo.Apply(req, targetRegion)
 
-	/*
-		HTTP REQUEST
-	*/
+	// HTTP REQUEST
 	start := time.Now()
 	resp, err := client.Do(req)
 	latency := time.Since(start).Milliseconds()
 
 	if err != nil {
-		metrics.RecordError(region)
+		metrics.RecordError(targetRegion)
 		return
 	}
 	defer resp.Body.Close()
 
-	/*
-		EDGE METRICS
-	*/
+	// EDGE METRICS
 	edge := resp.Header.Get("X-Cache-Node")
 	if edge == "" {
 		edge = "unknown"
 	}
 
-	clientID := req.RemoteAddr
+	// STICKINESS
+	clientID := req.Header.Get("X-Forwarded-For")
+	if clientID == "" {
+		clientID = req.RemoteAddr // fallback
+	}
 	stickiness.Record(clientID, edge)
 
-	metrics.RecordLatency(edge, region, latency)
+	// RECORD METRICS
+	metrics.RecordLatency(edge, targetRegion, latency)
+	metrics.RecordStickiness(stickiness.Ratio())
 }
 
 /*
@@ -228,12 +225,7 @@ func refreshTestState(store *state.DynamoStore, testID string) {
 			testStateMu.Unlock()
 
 			chaosMu.Lock()
-			currentChaos = chaos.Config{
-				Enabled:    test.ChaosConfig.Enabled,
-				LatencyMs:  test.ChaosConfig.LatencyMs,
-				ErrorRate:  test.ChaosConfig.ErrorRate,
-				BurstPause: test.ChaosConfig.BurstPause,
-			}
+			CurrentChaos = chaos.Config{Enabled: test.ChaosConfig.Enabled, LatencyMs: test.ChaosConfig.LatencyMs, ErrorRate: test.ChaosConfig.ErrorRate, BurstPause: test.ChaosConfig.BurstPause}
 			chaosMu.Unlock()
 		}
 

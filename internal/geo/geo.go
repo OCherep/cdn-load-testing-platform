@@ -1,46 +1,21 @@
 package geo
 
-import (
-	"math/rand"
-	"time"
-)
+import "net/http"
 
-type Region string
-
-const (
-	EU   Region = "EU"
-	US   Region = "US"
-	ASIA Region = "ASIA"
-)
-
-type Config struct {
-	BaseLatencyMs int
-	JitterMs      int
+func Apply(req *http.Request, region string) {
+	req.Header.Set("X-Geo-Region", region)
+	req.Header.Set("X-Forwarded-For", fakeIP(region))
 }
 
-var regionProfiles = map[Region]Config{
-	EU: {
-		BaseLatencyMs: 30,
-		JitterMs:      20,
-	},
-	US: {
-		BaseLatencyMs: 120,
-		JitterMs:      50,
-	},
-	ASIA: {
-		BaseLatencyMs: 250,
-		JitterMs:      80,
-	},
-}
-
-func Apply(region Region) {
-	cfg, ok := regionProfiles[region]
-	if !ok {
-		return
+func fakeIP(region string) string {
+	switch region {
+	case "eu":
+		return "2.16.0.1"
+	case "us":
+		return "23.0.0.1"
+	case "asia":
+		return "43.0.0.1"
+	default:
+		return "1.1.1.1"
 	}
-
-	jitter := rand.Intn(cfg.JitterMs)
-	delay := cfg.BaseLatencyMs + jitter
-
-	time.Sleep(time.Duration(delay) * time.Millisecond)
 }
