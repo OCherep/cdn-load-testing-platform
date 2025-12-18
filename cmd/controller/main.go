@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"cdn-load-platform/internal/auth"
+	"cdn-load-platform/internal/autoscale"
 	"cdn-load-platform/internal/chaos"
 	"cdn-load-platform/internal/cost"
 	"cdn-load-platform/internal/report"
@@ -271,6 +272,30 @@ func main() {
 			"file": file,
 		})
 	})
+
+	go autoscale.Run(
+		store,
+		func(testID string) autoscale.Metrics {
+			m := store.GetMetricsSnapshot(testID)
+			return autoscale.Metrics{
+				AvgLatency: m.AvgLatency,
+				ErrorRate:  m.ErrorRate,
+				RPS:        m.RPS,
+			}
+		},
+		func(testID string, d autoscale.Decision) {
+			store.UpdateNodes(testID, d.ScaleNodes)
+
+			_ = exec.Command(
+				"terraform",
+				"-chdir=terraform/load-nodes",
+				"apply",
+				"-auto-approve",
+				"-var", "test_id="+testID,
+				"-var", "nodes="+fmt.Sprint(d.ScaleNodes),
+			).Run()
+		},
+	)
 
 	log.Println("[controller] listening on :8080")
 	r.Run(":8080")
