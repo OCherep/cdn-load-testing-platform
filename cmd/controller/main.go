@@ -1,6 +1,9 @@
 package main
 
 import (
+	"cdn-load-platform/internal/metrics"
+	"cdn-load-platform/internal/qoe"
+	"fmt"
 	"log"
 	"net/http"
 	"os/exec"
@@ -327,3 +330,39 @@ func main() {
 	log.Println("[controller] listening on :8080")
 	r.Run(":8080")
 }
+
+go func() {
+	predictor := autoscale.NewPredictor(6)
+
+	for {
+		time.Sleep(10 * time.Second)
+
+		snap := metrics.SnapshotNow()
+		predictor.Add(snap)
+
+		predictedRPS := predictor.TrendRPS()
+		qoeScore := qoe.Compute(snap)
+
+		if qoeScore.Value < 80 {
+			log.Println("[autoscale] QoE low, scaling up")
+			exec.Command(
+				"terraform",
+				"-chdir=terraform/load-nodes",
+				"apply",
+				"-auto-approve",
+				"-var", "nodes=+1",
+			).Run()
+		}
+
+		if qoeScore.Value > 95 {
+			log.Println("[autoscale] QoE high, scaling down")
+			exec.Command(
+				"terraform",
+				"-chdir=terraform/load-nodes",
+				"apply",
+				"-auto-approve",
+				"-var", "nodes=-1",
+			).Run()
+		}
+	}
+}()
