@@ -83,6 +83,14 @@ func main() {
 	stickiness := load.NewStickinessTracker()
 
 	/*
+		TRACKER
+	*/
+	tracker := load.NewStickinessTracker()
+	for cdn, url := range profile.Targets {
+		go executeRequest(client, cdn, url, tracker, profile)
+	}
+
+	/*
 		HTTP CLIENT
 	*/
 	client := &http.Client{
@@ -156,60 +164,41 @@ EXECUTE SINGLE REQUEST
 */
 func executeRequest(
 	client *http.Client,
+	cdn string,
 	url string,
-	region string,
-	stickiness *load.StickinessTracker,
+	tracker *load.StickinessTracker,
+	profile *load.Profile,
 ) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		metrics.RecordError(region)
+		metrics.RecordError(cdn, "unknown")
 		return
 	}
 
-	// GEO SIMULATION
-	geo.Apply(region)
+	region := geo.Pick(profile.GeoDistribution)
+	geo.Apply(req, region)
 
-	// CHAOS
-	testStateMu.RLock()
-	cfg := resolveChaos(currentTestState)
-	testStateMu.RUnlock()
-
-	if err := chaos.Apply(cfg); err != nil {
-		metrics.RecordError(region)
+	if err := chaos.Apply(currentChaos); err != nil {
+		metrics.RecordError(cdn, region)
 		return
 	}
 
-	// Застосовуємо розподіл по гео для цього запиту
-	targetRegion := geo.Pick(profile.GeoDistribution)
-	geo.Apply(req, targetRegion)
-
-	// HTTP REQUEST
 	start := time.Now()
 	resp, err := client.Do(req)
 	latency := time.Since(start).Milliseconds()
 
 	if err != nil {
-		metrics.RecordError(targetRegion)
+		metrics.RecordError(cdn, region)
 		return
 	}
 	defer resp.Body.Close()
 
-	// EDGE METRICS
 	edge := resp.Header.Get("X-Cache-Node")
-	if edge == "" {
-		edge = "unknown"
-	}
-
-	// STICKINESS
 	clientID := req.Header.Get("X-Forwarded-For")
-	if clientID == "" {
-		clientID = req.RemoteAddr // fallback
-	}
-	stickiness.Record(clientID, edge)
 
-	// RECORD METRICS
-	metrics.RecordLatency(edge, targetRegion, latency)
-	metrics.RecordStickiness(stickiness.Ratio())
+	tracker.Record(clientID+"-"+cdn, edge)
+	metrics.RecordStickiness(tracker.Ratio())
+	metrics.RecordLatency(cdn, edge, region, latency)
 }
 
 /*

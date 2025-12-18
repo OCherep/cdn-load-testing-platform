@@ -33,6 +33,16 @@
           "refId": "C"
         }
       ]
+    },
+    {
+      "type": "timeseries",
+      "title": "P95 Latency by CDN",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(cdn_latency_ms_bucket[1m])) by (cdn, le))",
+          "legendFormat": "{{cdn}}"
+        }
+      ]
     }
   ]
 }
