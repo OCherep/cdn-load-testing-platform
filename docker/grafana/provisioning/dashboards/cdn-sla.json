@@ -1,0 +1,38 @@
+{
+  "id": null,
+  "title": "CDN SLA & Edge Metrics",
+  "schemaVersion": 38,
+  "version": 1,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "P95 Latency (ms)",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(cdn_latency_ms_bucket[1m])) by (le))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Error Rate",
+      "targets": [
+        {
+          "expr": "sum(rate(cdn_errors_total[1m]))",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency by Edge",
+      "targets": [
+        {
+          "expr": "avg(rate(cdn_latency_ms_sum[1m])) by (edge)",
+          "refId": "C"
+        }
+      ]
+    }
+  ]
+}
