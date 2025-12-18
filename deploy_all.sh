@@ -30,18 +30,32 @@ fi
 echo "🖥 Package manager detected: $PM"
 
 # -------------------------------------------------
-# 1. BASE PACKAGES
+# 1. BASE PACKAGES (SAFE)
 # -------------------------------------------------
 echo "📦 Installing base packages..."
 $UPDATE_CMD
 
-$INSTALL_CMD \
-  curl \
-  unzip \
-  jq \
-  ca-certificates \
-  gnupg \
-  tar
+BASE_PKGS=(unzip jq ca-certificates gnupg tar)
+
+for pkg in "${BASE_PKGS[@]}"; do
+  if ! rpm -q "$pkg" >/dev/null 2>&1 && [[ "$PM" != "apt" ]]; then
+    $INSTALL_CMD "$pkg"
+  elif [[ "$PM" == "apt" ]]; then
+    $INSTALL_CMD "$pkg"
+  fi
+done
+
+# ---- CURL (SPECIAL HANDLING FOR AMAZON LINUX)
+if ! command -v curl >/dev/null 2>&1; then
+  echo "📦 Installing curl"
+  if [[ "$PM" == "apt" ]]; then
+    $INSTALL_CMD curl
+  else
+    echo "ℹ️ curl-minimal already provided by system"
+  fi
+else
+  echo "✔ curl already present"
+fi
 
 # -------------------------------------------------
 # 2. DOCKER
@@ -123,10 +137,11 @@ docker compose up -d prometheus grafana
 # -------------------------------------------------
 # 8. DONE
 # -------------------------------------------------
+PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+
 echo ""
 echo "✅ DEPLOYMENT COMPLETE"
-echo "📊 Grafana: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):3000"
+echo "📊 Grafana: http://${PUBLIC_IP}:3000"
 echo "   login: admin / admin"
 echo ""
 echo "🧪 Controller API: http://localhost:8080"
-
