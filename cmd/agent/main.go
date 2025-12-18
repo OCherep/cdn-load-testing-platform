@@ -5,178 +5,168 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
 	"cdn-load-platform/internal/chaos"
-	"cdn-load-platform/internal/geo"
 	"cdn-load-platform/internal/load"
 	"cdn-load-platform/internal/metrics"
 	"cdn-load-platform/internal/state"
 )
 
 var (
-	currentChaos chaos.Config
-	chaosMu      sync.RWMutex
+	stateMu      sync.RWMutex
+	currentState *state.TestState
 )
 
 func main() {
 	log.Println("[agent] starting")
 
-	// --------------------
-	// ENV
-	// --------------------
+	// =====================
+	// ENVIRONMENT
+	// =====================
+	testID := os.Getenv("TEST_ID")
+	if testID == "" {
+		log.Fatal("TEST_ID env not set")
+	}
+
 	profileBucket := os.Getenv("PROFILE_BUCKET")
 	profileKey := os.Getenv("PROFILE_KEY")
-	testID := os.Getenv("TEST_ID")
-	awsRegion := os.Getenv("AWS_REGION")
-
-	if profileBucket == "" || profileKey == "" || testID == "" {
-		log.Fatal("PROFILE_BUCKET, PROFILE_KEY or TEST_ID not set")
+	if profileBucket == "" || profileKey == "" {
+		log.Fatal("PROFILE_BUCKET or PROFILE_KEY env not set")
 	}
 
-	// --------------------
-	// Metrics
-	// --------------------
+	// =====================
+	// METRICS
+	// =====================
 	metrics.Start()
 
-	// --------------------
-	// State store (DynamoDB)
-	// --------------------
-	stateStore, err := state.NewDynamoStore(awsRegion)
-	if err != nil {
-		log.Fatalf("state store init failed: %v", err)
-	}
+	// =====================
+	// STATE STORE
+	// =====================
+	store := state.NewDynamoStoreFromEnv()
+	go refreshTestState(store, testID)
 
-	// --------------------
-	// Load profile
-	// --------------------
+	// =====================
+	// LOAD PROFILE
+	// =====================
 	profile, err := load.LoadProfileFromS3(profileBucket, profileKey)
 	if err != nil {
-		log.Fatalf("profile load failed: %v", err)
+		log.Fatalf("failed to load profile: %v", err)
 	}
 
-	// --------------------
-	// Adaptive load engine
-	// --------------------
+	// =====================
+	// LOAD ENGINE
+	// =====================
 	engine := load.NewAdaptiveEngine(
 		profile.MinRPS,
 		profile.MaxRPS,
-		profile.Step,
 	)
 
-	// --------------------
-	// Chaos config refresher
-	// --------------------
-	go refreshTestState(stateStore, testID)
+	// =====================
+	// EDGE STICKINESS
+	// =====================
+	tracker := load.NewStickinessTracker()
 
-	// --------------------
-	// HTTP client
-	// --------------------
+	// =====================
+	// HTTP CLIENT
+	// =====================
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: 15 * time.Second,
 	}
 
-	// --------------------
-	// Rate limiter ticker
-	// --------------------
-	rateTicker := time.NewTicker(time.Second)
-	defer rateTicker.Stop()
+	// =====================
+	// MAIN LOOP
+	// =====================
+	for {
+		stateMu.RLock()
+		ts := currentState
+		stateMu.RUnlock()
 
-	// --------------------
-	// geo region
-	// --------------------
-	region := geo.DetectRegion()
-	log.Printf("[agent] region=%s", region)
+		// wait until state appears
+		if ts == nil {
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
 
-	var testStateMu sync.RWMutex
-	var currentTestState *state.TestState
-
-	// --------------------
-	// Main loop
-	// --------------------
-	for range rateTicker.C {
-
-		rps := engine.CurrentRPS()
-		interval := time.Second / time.Duration(rps)
-
-		reqTicker := time.NewTicker(interval)
-
-		go func() {
-			for range reqTicker.C {
-				go executeRequest(client, profile.TargetURL)
+		// pause / stop handling
+		if ts.Status != "running" {
+			if ts.Status == "stopped" {
+				log.Println("[agent] test stopped")
+				return
 			}
-		}()
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
 
-		// Adaptive adjustment once per second
-		m := metrics.Snapshot()
-		newRPS := engine.Adjust(m)
-		log.Printf("[agent] RPS adjusted to %d", newRPS)
+		// TTL expiration
+		if time.Now().Unix() > ts.ExpiresAt {
+			log.Println("[agent] test expired")
+			return
+		}
+
+		// live RPS override
+		if ts.DesiredRPS != nil {
+			engine.SetTarget(*ts.DesiredRPS)
+		}
+
+		// =====================
+		// EXECUTE ONE STEP
+		// =====================
+		engine.Step(func() {
+			// Apply chaos BEFORE request
+			chaos.Apply(ts.ChaosConfig)
+
+			req, err := http.NewRequest("GET", profile.URL, nil)
+			if err != nil {
+				return
+			}
+
+			start := time.Now()
+			resp, err := client.Do(req)
+			latency := time.Since(start).Milliseconds()
+
+			if err != nil {
+				metrics.RecordError()
+				return
+			}
+			defer resp.Body.Close()
+
+			// =====================
+			// EDGE METRICS
+			// =====================
+			edge := resp.Header.Get("X-Cache-Node")
+			if edge == "" {
+				edge = "unknown"
+			}
+
+			host := resp.Request.URL.Hostname()
+			clientID := host
+			if !profile.StickyMode {
+				clientID = strconv.FormatInt(time.Now().UnixNano(), 10)
+			} // достатньо для stickiness
+
+			tracker.Record(clientID, edge)
+			ratio := tracker.Ratio(clientID)
+			metrics.RecordStickiness(clientID, ratio)
+
+			metrics.RecordEdge(edge, host, latency)
+			metrics.RecordLatency(latency)
+		})
 	}
 }
 
-func executeRequest(client *http.Client, url string) {
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		metrics.RecordError()
-		return
-	}
-
-	// GEO simulation
-	geo.Apply(region)
-
-	// --------------------
-	// CHAOS INJECTION
-	// --------------------
-	chaosMu.RLock()
-	err = chaos.Apply(currentChaos)
-	chaosMu.RUnlock()
-
-	if err != nil {
-		metrics.RecordError()
-		return
-	}
-
-	// --------------------
-	// HTTP request
-	// --------------------
-	start := time.Now()
-	resp, err := client.Do(req)
-	latency := time.Since(start).Milliseconds()
-
-	if err != nil {
-		metrics.RecordError()
-		return
-	}
-	defer resp.Body.Close()
-
-	// --------------------
-	// Edge metrics
-	// --------------------
-	edge := resp.Header.Get("X-Cache-Node")
-	ip := resp.Request.URL.Hostname()
-
-	//metrics.RecordEdge(edge, ip, latency)
-	metrics.RecordLatency(edge, string(region), latency)
-	//metrics.RecordLatency(latency)
-	metrics.RecordError(string(region))
-}
-
+// =====================
+// STATE REFRESH LOOP
+// =====================
 func refreshTestState(store *state.DynamoStore, testID string) {
 	for {
-		test, err := store.GetTest(context.Background(), testID)
+		ts, err := store.GetTest(context.Background(), testID)
 		if err == nil {
-			testStateMu.Lock()
-			currentTestState = &test
-			testStateMu.Unlock()
-		}
-		testStateMu.RLock()
-		ts := currentTestState
-		testStateMu.RUnlock()
-
-		if ts == nil || ts.Status != "running" {
-			time.Sleep(200 * time.Millisecond)
-			return
+			stateMu.Lock()
+			currentState = &ts
+			stateMu.Unlock()
 		}
 		time.Sleep(5 * time.Second)
 	}

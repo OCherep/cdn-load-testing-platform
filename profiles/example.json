@@ -1,5 +1,13 @@
 {
   "name": "stress",
   "url": "http://cdn.example.com/test.m3u8",
-  "sessions": 10000
+  "sessions": 10000,
+  {
+    "cdns": [
+      { "name": "akamai", "url": "https://akamai.example.com/video.m3u8" },
+      { "name": "cloudflare", "url": "https://cf.example.com/video.m3u8" }
+    ],
+    "min_rps": 500,
+    "max_rps": 5000
+  }
 }

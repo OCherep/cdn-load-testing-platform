@@ -3,6 +3,9 @@ package main
 import (
 	"cdn-load-platform/internal/chaos"
 	"cdn-load-platform/internal/cost"
+	"cdn-load-platform/internal/orchestrator"
+	"cdn-load-platform/internal/sla"
+	"log"
 	"net/http"
 	"os/exec"
 	"time"
@@ -11,6 +14,8 @@ import (
 	"github.com/gorilla/websocket"
 
 	"cdn-load-platform/internal/auth"
+	"cdn-load-platform/internal/metrics"
+	"cdn-load-platform/internal/report"
 	"cdn-load-platform/internal/state"
 )
 
@@ -140,6 +145,26 @@ func main() {
 		c.Status(204)
 	})
 
+	asg := orchestrator.NewASGController()
+
+	api.POST("/agents/scale", func(c *gin.Context) {
+		var body struct {
+			Desired int32 `json:"desired"`
+		}
+		if err := c.BindJSON(&body); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+
+		err := asg.SetDesired(body.Desired)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(200, gin.H{"status": "scaling"})
+	})
+
 	r.GET("/ws/tests/:id", func(c *gin.Context) {
 		ws, _ := upgrader.Upgrade(c.Writer, c.Request, nil)
 		handleWS(ws)
@@ -160,6 +185,52 @@ func main() {
 		TestID:          id,
 		Status:          "CREATED",
 		CostEstimateUSD: costUSD,
+	})
+
+	rule := sla.EdgeAffinityRule{MinRatio: 0.8}
+
+	if sla.EdgeAffinityBreached(metrics.AvgStickiness(), rule) {
+		log.Println("[SLA] Edge affinity breach")
+	}
+
+	http.HandleFunc("/api/tests/report/pdf", func(w http.ResponseWriter, r *http.Request) {
+		testID := r.URL.Query().Get("test_id")
+		if testID == "" {
+			http.Error(w, "missing test_id", http.StatusBadRequest)
+			return
+		}
+
+		// === LOAD TEST STATE ===
+		test, err := stateStore.GetTest(r.Context(), testID)
+		if err != nil {
+			http.Error(w, "test not found", http.StatusNotFound)
+			return
+		}
+
+		// === COLLECT METRICS ===
+		evidence := report.SLAEvidence{
+			TestID:    test.ID,
+			TargetURL: test.TargetURL,
+			StartTime: test.StartTime,
+			EndTime:   time.Now(),
+
+			AvgLatencyMs:    metrics.Global.AvgLatency(),
+			P95LatencyMs:    metrics.Global.P95Latency(),
+			ErrorRate:       metrics.Global.ErrorRate(),
+			StickinessRatio: metrics.Global.StickinessRatio(),
+
+			LatencySLAms:  test.SLA.LatencyMs,
+			ErrorRateSLA:  test.SLA.ErrorRate,
+			StickinessSLA: test.SLA.StickinessRatio,
+		}
+
+		file, err := report.ExportSLAEvidencePDF(evidence)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		http.ServeFile(w, r, file)
 	})
 
 	r.Run(":8080")

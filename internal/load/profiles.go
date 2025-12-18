@@ -10,9 +10,12 @@ import (
 )
 
 type Profile struct {
-	Name     string `json:"name"`
-	URL      string `json:"url"`
-	Sessions int    `json:"sessions"`
+	Name       string `json:"name"`
+	URL        string `json:"url"`
+	Sessions   int    `json:"sessions"`
+	MinRPS     int    `json:"min_rps"`
+	MaxRPS     int    `json:"max_rps"`
+	StickyMode bool   `json:"sticky_mode"`
 }
 
 func LoadProfileFromS3(bucket, key string) (Profile, error) {

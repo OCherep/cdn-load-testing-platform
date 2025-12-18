@@ -50,3 +50,7 @@ func (e *AdaptiveEngine) Adjust(m Metrics) int {
 
 	return e.currentRPS
 }
+
+target := multiCDN.Pick(workerID)
+req.URL = target.URL
+metrics.RecordCDN(target.Name, latency)
