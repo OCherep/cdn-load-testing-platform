@@ -1,42 +1,69 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "🚀 CDN Load Testing Platform – FULL BOOTSTRAP"
+echo "🚀 CDN Load Testing Platform – UNIVERSAL BOOTSTRAP"
 
 # -------------------------------------------------
-# 0. OS CHECK
+# 0. OS / PACKAGE MANAGER DETECTION
 # -------------------------------------------------
-if [ ! -f /etc/os-release ]; then
-  echo "❌ Unsupported OS"
+PM=""
+INSTALL_CMD=""
+UPDATE_CMD=""
+
+if command -v apt-get >/dev/null 2>&1; then
+  PM="apt"
+  UPDATE_CMD="sudo apt-get update -y"
+  INSTALL_CMD="sudo apt-get install -y"
+elif command -v dnf >/dev/null 2>&1; then
+  PM="dnf"
+  UPDATE_CMD="sudo dnf makecache -y"
+  INSTALL_CMD="sudo dnf install -y"
+elif command -v yum >/dev/null 2>&1; then
+  PM="yum"
+  UPDATE_CMD="sudo yum makecache -y"
+  INSTALL_CMD="sudo yum install -y"
+else
+  echo "❌ Unsupported Linux distribution"
   exit 1
 fi
 
-source /etc/os-release
-echo "🖥 OS detected: $PRETTY_NAME"
+echo "🖥 Package manager detected: $PM"
 
 # -------------------------------------------------
-# 1. INSTALL PREREQUISITES
+# 1. BASE PACKAGES
 # -------------------------------------------------
-echo "📦 Installing prerequisites..."
+echo "📦 Installing base packages..."
+$UPDATE_CMD
 
-sudo apt-get update -y
-sudo apt-get install -y \
-  ca-certificates \
+$INSTALL_CMD \
   curl \
   unzip \
+  jq \
+  ca-certificates \
   gnupg \
-  lsb-release \
-  jq
+  tar
 
-# ---- Docker ----
-if ! command -v docker >/dev/null; then
+# -------------------------------------------------
+# 2. DOCKER
+# -------------------------------------------------
+if ! command -v docker >/dev/null 2>&1; then
   echo "🐳 Installing Docker"
-  curl -fsSL https://get.docker.com | sudo sh
-  sudo usermod -aG docker $USER
+
+  if [[ "$PM" == "apt" ]]; then
+    curl -fsSL https://get.docker.com | sudo sh
+  else
+    sudo $INSTALL_CMD docker
+    sudo systemctl enable docker
+    sudo systemctl start docker
+  fi
 fi
 
-# ---- Docker Compose ----
-if ! command -v docker-compose >/dev/null; then
+docker --version
+
+# -------------------------------------------------
+# 3. DOCKER COMPOSE (v2)
+# -------------------------------------------------
+if ! command -v docker-compose >/dev/null 2>&1; then
   echo "🐳 Installing Docker Compose"
   sudo curl -L \
     "https://github.com/docker/compose/releases/download/v2.25.0/docker-compose-$(uname -s)-$(uname -m)" \
@@ -44,27 +71,37 @@ if ! command -v docker-compose >/dev/null; then
   sudo chmod +x /usr/local/bin/docker-compose
 fi
 
-# ---- Terraform >= 1.5 ----
-if ! command -v terraform >/dev/null; then
+docker-compose version
+
+# -------------------------------------------------
+# 4. TERRAFORM >= 1.5
+# -------------------------------------------------
+if ! command -v terraform >/dev/null 2>&1; then
   echo "🏗 Installing Terraform"
-  curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp.gpg
-  echo "deb [signed-by=/usr/share/keyrings/hashicorp.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
-    | sudo tee /etc/apt/sources.list.d/hashicorp.list
-  sudo apt-get update && sudo apt-get install terraform -y
+
+  TF_VERSION="1.6.6"
+  curl -LO "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+  unzip terraform_${TF_VERSION}_linux_amd64.zip
+  sudo mv terraform /usr/local/bin/
+  rm terraform_${TF_VERSION}_linux_amd64.zip
 fi
 
 terraform version
 
 # -------------------------------------------------
-# 2. AWS ENV
+# 5. AWS ENV
 # -------------------------------------------------
 export AWS_REGION=${AWS_REGION:-eu-central-1}
-export AWS_PROFILE=${AWS_PROFILE:-cdn-load}
+export AWS_PROFILE=${AWS_PROFILE:-default}
 
 echo "☁️ AWS_REGION=$AWS_REGION"
+aws sts get-caller-identity >/dev/null || {
+  echo "❌ AWS credentials not available (IAM role missing?)"
+  exit 1
+}
 
 # -------------------------------------------------
-# 3. INFRASTRUCTURE
+# 6. INFRASTRUCTURE DEPLOY
 # -------------------------------------------------
 echo "🧱 Deploying infrastructure"
 
@@ -78,13 +115,18 @@ terraform -chdir=terraform/load-nodes init
 terraform -chdir=terraform/load-nodes apply -auto-approve
 
 # -------------------------------------------------
-# 4. OBSERVABILITY
+# 7. OBSERVABILITY
 # -------------------------------------------------
-echo "📊 Starting Prometheus + Grafana"
+echo "📊 Starting Prometheus & Grafana"
 docker compose up -d prometheus grafana
 
 # -------------------------------------------------
-# 5. DONE
+# 8. DONE
 # -------------------------------------------------
-echo "✅ Platform ready"
-echo "➡️ Grafana: http://localhost:3000 (admin/admin)"
+echo ""
+echo "✅ DEPLOYMENT COMPLETE"
+echo "📊 Grafana: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4):3000"
+echo "   login: admin / admin"
+echo ""
+echo "🧪 Controller API: http://localhost:8080"
+
