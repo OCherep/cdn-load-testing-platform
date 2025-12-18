@@ -3,41 +3,35 @@ package load
 import "sync"
 
 type StickinessTracker struct {
-	mu    sync.Mutex
-	edges map[string]map[string]int
+	mu     sync.Mutex
+	client map[string]string
+	hits   map[string]int
 }
 
 func NewStickinessTracker() *StickinessTracker {
 	return &StickinessTracker{
-		edges: make(map[string]map[string]int),
+		client: make(map[string]string),
+		hits:   make(map[string]int),
 	}
 }
 
-func (s *StickinessTracker) Record(client, edge string) {
+func (s *StickinessTracker) Record(clientID, edge string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.edges[client]; !ok {
-		s.edges[client] = make(map[string]int)
+	if prev, ok := s.client[clientID]; ok && prev != edge {
+		s.hits["switch"]++
 	}
-	s.edges[client][edge]++
+	s.client[clientID] = edge
+	s.hits["total"]++
 }
 
-func (s *StickinessTracker) Ratio(client string) float64 {
+func (s *StickinessTracker) Ratio() float64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	m := s.edges[client]
-	if len(m) == 0 {
-		return 0
+	if s.hits["total"] == 0 {
+		return 1
 	}
-
-	var max, sum int
-	for _, v := range m {
-		sum += v
-		if v > max {
-			max = v
-		}
-	}
-	return float64(max) / float64(sum)
+	return 1 - float64(s.hits["switch"])/float64(s.hits["total"])
 }

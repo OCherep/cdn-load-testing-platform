@@ -44,8 +44,6 @@ docker build -f docker/controller.Dockerfile -t cdn-controller .
 
 echo "DEPLOY COMPLETE"
 
-
-
 ### old command without single-command start ###
 #
 #docker build -t load-agent -f docker/agent.Dockerfile .

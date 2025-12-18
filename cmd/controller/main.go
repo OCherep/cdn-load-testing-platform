@@ -1,128 +1,153 @@
 package main
 
 import (
-	"cdn-load-platform/internal/chaos"
-	"cdn-load-platform/internal/cost"
-	"cdn-load-platform/internal/orchestrator"
-	"cdn-load-platform/internal/sla"
 	"log"
 	"net/http"
 	"os/exec"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
 	"cdn-load-platform/internal/auth"
-	"cdn-load-platform/internal/metrics"
-	"cdn-load-platform/internal/report"
+	"cdn-load-platform/internal/chaos"
+	"cdn-load-platform/internal/cost"
 	"cdn-load-platform/internal/state"
 )
 
-var upgrader = websocket.Upgrader{}
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
 
 func main() {
 	r := gin.Default()
+
+	/*
+		STATE STORE
+	*/
 	store := state.NewStore("cdn-load-tests")
 
+	/*
+		AUTH
+	*/
 	r.POST("/auth/login", func(c *gin.Context) {
-		token, _ := auth.Generate("admin")
+		token, err := auth.Generate("admin")
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(200, gin.H{"token": token})
 	})
 
 	api := r.Group("/tests")
-	api.Use(JWTMiddleware())
+	api.Use(auth.JWTMiddleware())
 
+	/*
+		CREATE TEST
+	*/
 	api.POST("", func(c *gin.Context) {
 		var req struct {
-			ProfileKey string `json:"profile_key"`
-			Nodes      int    `json:"nodes"`
-			Sessions   int    `json:"sessions"`
+			ProfileKey   string  `json:"profile_key"`
+			Nodes        int     `json:"nodes"`
+			Sessions     int     `json:"sessions"`
+			DurationSec  int64   `json:"duration_sec"`
+			MaxBudgetUSD float64 `json:"max_budget_usd"`
 		}
-		c.BindJSON(&req)
+
+		if err := c.BindJSON(&req); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
 
 		id := uuid.New().String()
 
+		/*
+			COST GUARD
+		*/
+		costUSD := cost.Estimate(
+			req.Nodes,
+			"c6i.large",
+			float64(req.DurationSec)/3600,
+		)
+
+		if req.MaxBudgetUSD > 0 && costUSD > req.MaxBudgetUSD {
+			c.JSON(400, gin.H{"error": "budget exceeded", "estimate": costUSD})
+			return
+		}
+
 		store.PutTest(state.TestState{
-			TestID:     id,
-			Status:     "CREATED",
-			ProfileKey: req.ProfileKey,
-			Nodes:      req.Nodes,
-			Sessions:   req.Sessions,
-			StartedAt:  time.Now().Unix(),
-			TTL:        3600,
+			TestID:          id,
+			Status:          "created",
+			ProfileKey:      req.ProfileKey,
+			Nodes:           req.Nodes,
+			Sessions:        req.Sessions,
+			StartedAt:       time.Now().Unix(),
+			TTL:             req.DurationSec,
+			CostEstimateUSD: costUSD,
 		})
 
-		c.JSON(201, gin.H{"test_id": id})
+		c.JSON(201, gin.H{
+			"test_id":       id,
+			"cost_estimate": costUSD,
+		})
 	})
 
+	/*
+		LIST TESTS
+	*/
 	api.GET("", func(c *gin.Context) {
-		tests, _ := store.List()
+		tests, err := store.List()
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(200, tests)
 	})
 
+	/*
+		START TEST
+	*/
 	api.POST("/:id/start", func(c *gin.Context) {
 		id := c.Param("id")
 
-		exec.Command("terraform",
+		err := exec.Command(
+			"terraform",
 			"-chdir=terraform/load-nodes",
-			"apply", "-auto-approve",
+			"apply",
+			"-auto-approve",
 			"-var", "test_id="+id,
 		).Run()
 
-		store.UpdateStatus(id, "RUNNING")
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+
+		store.UpdateStatus(id, "running")
 		c.Status(204)
 	})
 
+	/*
+		STOP TEST
+	*/
 	api.POST("/:id/stop", func(c *gin.Context) {
 		id := c.Param("id")
 
-		exec.Command("terraform",
+		_ = exec.Command(
+			"terraform",
 			"-chdir=terraform/load-nodes",
-			"destroy", "-auto-approve").Run()
+			"destroy",
+			"-auto-approve",
+		).Run()
 
-		store.UpdateStatus(id, "FINISHED")
+		store.UpdateStatus(id, "finished")
 		c.Status(204)
 	})
 
-	api.POST("/:id/chaos", func(c *gin.Context) {
-		id := c.Param("id")
-
-		var cfg state.ChaosConfig
-		c.BindJSON(&cfg)
-
-		store.UpdateChaos(id, cfg)
-		c.Status(204)
-	})
-
-	api.POST("/:id/chaos/schedule", func(c *gin.Context) {
-		id := c.Param("id")
-
-		var schedule chaos.Schedule
-		if err := c.BindJSON(&schedule); err != nil {
-			c.JSON(400, gin.H{"error": err.Error()})
-			return
-		}
-
-		store.UpdateChaosSchedule(id, schedule)
-		c.Status(204)
-	})
-
-	api.POST("/:id/rps", func(c *gin.Context) {
-		id := c.Param("id")
-
-		var body struct {
-			RPS int `json:"rps"`
-		}
-		if err := c.BindJSON(&body); err != nil {
-			c.JSON(400, gin.H{"error": err.Error()})
-			return
-		}
-
-		store.UpdateDesiredRPS(id, body.RPS)
-		c.Status(204)
-	})
-
+	/*
+		PAUSE / RESUME
+	*/
 	api.POST("/:id/pause", func(c *gin.Context) {
 		store.UpdateStatus(c.Param("id"), "paused")
 		c.Status(204)
@@ -133,105 +158,82 @@ func main() {
 		c.Status(204)
 	})
 
-	api.POST("/:id/extend", func(c *gin.Context) {
-		id := c.Param("id")
-
+	/*
+		UPDATE RPS
+	*/
+	api.POST("/:id/rps", func(c *gin.Context) {
 		var body struct {
-			Seconds int64 `json:"seconds"`
-		}
-		c.BindJSON(&body)
-
-		store.ExtendTTL(id, body.Seconds)
-		c.Status(204)
-	})
-
-	asg := orchestrator.NewASGController()
-
-	api.POST("/agents/scale", func(c *gin.Context) {
-		var body struct {
-			Desired int32 `json:"desired"`
+			RPS int `json:"rps"`
 		}
 		if err := c.BindJSON(&body); err != nil {
 			c.JSON(400, gin.H{"error": err.Error()})
 			return
 		}
 
-		err := asg.SetDesired(body.Desired)
-		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
+		store.UpdateDesiredRPS(c.Param("id"), body.RPS)
+		c.Status(204)
+	})
+
+	/*
+		CHAOS CONFIG
+	*/
+	api.POST("/:id/chaos", func(c *gin.Context) {
+		var cfg state.ChaosConfig
+		if err := c.BindJSON(&cfg); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
 			return
 		}
 
-		c.JSON(200, gin.H{"status": "scaling"})
+		store.UpdateChaos(c.Param("id"), cfg)
+		c.Status(204)
 	})
 
+	/*
+		CHAOS SCHEDULE
+	*/
+	api.POST("/:id/chaos/schedule", func(c *gin.Context) {
+		var schedule chaos.Schedule
+		if err := c.BindJSON(&schedule); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+
+		store.UpdateChaosSchedule(c.Param("id"), schedule)
+		c.Status(204)
+	})
+
+	/*
+		EXTEND TTL
+	*/
+	api.POST("/:id/extend", func(c *gin.Context) {
+		var body struct {
+			Seconds int64 `json:"seconds"`
+		}
+		if err := c.BindJSON(&body); err != nil {
+			c.JSON(400, gin.H{"error": err.Error()})
+			return
+		}
+
+		store.ExtendTTL(c.Param("id"), body.Seconds)
+		c.Status(204)
+	})
+
+	/*
+		WEBSOCKET (LIVE UI)
+	*/
 	r.GET("/ws/tests/:id", func(c *gin.Context) {
-		ws, _ := upgrader.Upgrade(c.Writer, c.Request, nil)
-		handleWS(ws)
-	})
-
-	costUSD := cost.Estimate(
-		req.Nodes,
-		"c6i.large",
-		float64(req.DurationSec)/3600,
-	)
-
-	if costUSD > req.MaxBudgetUSD {
-		c.JSON(400, gin.H{"error": "budget exceeded"})
-		return
-	}
-
-	store.PutTest(state.TestState{
-		TestID:          id,
-		Status:          "CREATED",
-		CostEstimateUSD: costUSD,
-	})
-
-	rule := sla.EdgeAffinityRule{MinRatio: 0.8}
-
-	if sla.EdgeAffinityBreached(metrics.AvgStickiness(), rule) {
-		log.Println("[SLA] Edge affinity breach")
-	}
-
-	http.HandleFunc("/api/tests/report/pdf", func(w http.ResponseWriter, r *http.Request) {
-		testID := r.URL.Query().Get("test_id")
-		if testID == "" {
-			http.Error(w, "missing test_id", http.StatusBadRequest)
-			return
-		}
-
-		// === LOAD TEST STATE ===
-		test, err := stateStore.GetTest(r.Context(), testID)
+		ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
-			http.Error(w, "test not found", http.StatusNotFound)
 			return
 		}
+		defer ws.Close()
 
-		// === COLLECT METRICS ===
-		evidence := report.SLAEvidence{
-			TestID:    test.ID,
-			TargetURL: test.TargetURL,
-			StartTime: test.StartTime,
-			EndTime:   time.Now(),
-
-			AvgLatencyMs:    metrics.Global.AvgLatency(),
-			P95LatencyMs:    metrics.Global.P95Latency(),
-			ErrorRate:       metrics.Global.ErrorRate(),
-			StickinessRatio: metrics.Global.StickinessRatio(),
-
-			LatencySLAms:  test.SLA.LatencyMs,
-			ErrorRateSLA:  test.SLA.ErrorRate,
-			StickinessSLA: test.SLA.StickinessRatio,
+		for {
+			time.Sleep(1 * time.Second)
+			ws.WriteJSON(gin.H{"status": "alive"})
 		}
-
-		file, err := report.ExportSLAEvidencePDF(evidence)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-
-		http.ServeFile(w, r, file)
 	})
 
+	log.Println("[controller] listening on :8080")
 	r.Run(":8080")
 }

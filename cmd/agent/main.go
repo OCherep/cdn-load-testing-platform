@@ -5,169 +5,218 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"sync"
 	"time"
 
 	"cdn-load-platform/internal/chaos"
+	"cdn-load-platform/internal/geo"
 	"cdn-load-platform/internal/load"
 	"cdn-load-platform/internal/metrics"
 	"cdn-load-platform/internal/state"
 )
 
+/*
+GLOBAL STATE
+*/
 var (
-	stateMu      sync.RWMutex
-	currentState *state.TestState
+	currentChaos chaos.Config
+	chaosMu      sync.RWMutex
+
+	currentTestState *state.TestState
+	testStateMu      sync.RWMutex
 )
 
 func main() {
 	log.Println("[agent] starting")
 
-	// =====================
-	// ENVIRONMENT
-	// =====================
-	testID := os.Getenv("TEST_ID")
-	if testID == "" {
-		log.Fatal("TEST_ID env not set")
-	}
-
+	/*
+		ENV
+	*/
 	profileBucket := os.Getenv("PROFILE_BUCKET")
 	profileKey := os.Getenv("PROFILE_KEY")
-	if profileBucket == "" || profileKey == "" {
-		log.Fatal("PROFILE_BUCKET or PROFILE_KEY env not set")
+	testID := os.Getenv("TEST_ID")
+	awsRegion := os.Getenv("AWS_REGION")
+
+	if profileBucket == "" || profileKey == "" || testID == "" {
+		log.Fatal("PROFILE_BUCKET, PROFILE_KEY or TEST_ID not set")
 	}
 
-	// =====================
-	// METRICS
-	// =====================
+	/*
+		METRICS
+	*/
 	metrics.Start()
 
-	// =====================
-	// STATE STORE
-	// =====================
-	store := state.NewDynamoStoreFromEnv()
-	go refreshTestState(store, testID)
-
-	// =====================
-	// LOAD PROFILE
-	// =====================
-	profile, err := load.LoadProfileFromS3(profileBucket, profileKey)
+	/*
+		STATE STORE
+	*/
+	stateStore, err := state.NewDynamoStore(awsRegion)
 	if err != nil {
-		log.Fatalf("failed to load profile: %v", err)
+		log.Fatalf("state store init failed: %v", err)
 	}
 
-	// =====================
-	// LOAD ENGINE
-	// =====================
+	/*
+		LOAD PROFILE
+	*/
+	profile, err := load.LoadProfileFromS3(profileBucket, profileKey)
+	if err != nil {
+		log.Fatalf("profile load failed: %v", err)
+	}
+
+	/*
+		ADAPTIVE LOAD ENGINE
+	*/
 	engine := load.NewAdaptiveEngine(
 		profile.MinRPS,
 		profile.MaxRPS,
+		profile.Step,
 	)
 
-	// =====================
-	// EDGE STICKINESS
-	// =====================
-	tracker := load.NewStickinessTracker()
+	/*
+		GEO
+	*/
+	region := geo.DetectRegion()
+	log.Printf("[agent] geo region = %s", region)
 
-	// =====================
-	// HTTP CLIENT
-	// =====================
+	/*
+		STICKINESS
+	*/
+	stickiness := load.NewStickinessTracker()
+
+	/*
+		HTTP CLIENT
+	*/
 	client := &http.Client{
-		Timeout: 15 * time.Second,
+		Timeout: 10 * time.Second,
 	}
 
-	// =====================
-	// MAIN LOOP
-	// =====================
-	for {
-		stateMu.RLock()
-		ts := currentState
-		stateMu.RUnlock()
+	/*
+		REFRESH TEST STATE (status, chaos, rps)
+	*/
+	go refreshTestState(stateStore, testID)
 
-		// wait until state appears
-		if ts == nil {
-			time.Sleep(200 * time.Millisecond)
+	/*
+		MAIN LOAD LOOP
+	*/
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+
+		testStateMu.RLock()
+		ts := currentTestState
+		testStateMu.RUnlock()
+
+		if ts == nil || ts.Status != "running" {
 			continue
 		}
 
-		// pause / stop handling
-		if ts.Status != "running" {
-			if ts.Status == "stopped" {
-				log.Println("[agent] test stopped")
-				return
-			}
-			time.Sleep(300 * time.Millisecond)
+		rps := engine.CurrentRPS()
+		if rps <= 0 {
 			continue
 		}
 
-		// TTL expiration
-		if time.Now().Unix() > ts.ExpiresAt {
-			log.Println("[agent] test expired")
-			return
+		interval := time.Second / time.Duration(rps)
+
+		for i := 0; i < rps; i++ {
+			go executeRequest(
+				client,
+				profile.TargetURL,
+				region,
+				stickiness,
+			)
+			time.Sleep(interval)
 		}
 
-		// live RPS override
-		if ts.DesiredRPS != nil {
-			engine.SetTarget(*ts.DesiredRPS)
-		}
-
-		// =====================
-		// EXECUTE ONE STEP
-		// =====================
-		engine.Step(func() {
-			// Apply chaos BEFORE request
-			chaos.Apply(ts.ChaosConfig)
-
-			req, err := http.NewRequest("GET", profile.URL, nil)
-			if err != nil {
-				return
-			}
-
-			start := time.Now()
-			resp, err := client.Do(req)
-			latency := time.Since(start).Milliseconds()
-
-			if err != nil {
-				metrics.RecordError()
-				return
-			}
-			defer resp.Body.Close()
-
-			// =====================
-			// EDGE METRICS
-			// =====================
-			edge := resp.Header.Get("X-Cache-Node")
-			if edge == "" {
-				edge = "unknown"
-			}
-
-			host := resp.Request.URL.Hostname()
-			clientID := host
-			if !profile.StickyMode {
-				clientID = strconv.FormatInt(time.Now().UnixNano(), 10)
-			} // достатньо для stickiness
-
-			tracker.Record(clientID, edge)
-			ratio := tracker.Ratio(clientID)
-			metrics.RecordStickiness(clientID, ratio)
-
-			metrics.RecordEdge(edge, host, latency)
-			metrics.RecordLatency(latency)
-		})
+		/*
+			ADAPTIVE ADJUSTMENT
+		*/
+		snapshot := metrics.Snapshot()
+		newRPS := engine.Adjust(snapshot)
+		log.Printf("[agent] RPS adjusted -> %d", newRPS)
 	}
 }
 
-// =====================
-// STATE REFRESH LOOP
-// =====================
+/*
+EXECUTE SINGLE REQUEST
+*/
+func executeRequest(
+	client *http.Client,
+	url string,
+	region string,
+	stickiness *load.StickinessTracker,
+) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		metrics.RecordError(region)
+		return
+	}
+
+	/*
+		GEO SIMULATION
+	*/
+	geo.Apply(region)
+
+	/*
+		CHAOS
+	*/
+	chaosMu.RLock()
+	err = chaos.Apply(currentChaos)
+	chaosMu.RUnlock()
+
+	if err != nil {
+		metrics.RecordError(region)
+		return
+	}
+
+	/*
+		HTTP REQUEST
+	*/
+	start := time.Now()
+	resp, err := client.Do(req)
+	latency := time.Since(start).Milliseconds()
+
+	if err != nil {
+		metrics.RecordError(region)
+		return
+	}
+	defer resp.Body.Close()
+
+	/*
+		EDGE METRICS
+	*/
+	edge := resp.Header.Get("X-Cache-Node")
+	if edge == "" {
+		edge = "unknown"
+	}
+
+	clientID := req.RemoteAddr
+	stickiness.Record(clientID, edge)
+
+	metrics.RecordLatency(edge, region, latency)
+}
+
+/*
+REFRESH TEST STATE FROM CONTROLLER (DYNAMO)
+*/
 func refreshTestState(store *state.DynamoStore, testID string) {
 	for {
-		ts, err := store.GetTest(context.Background(), testID)
+		test, err := store.GetTest(context.Background(), testID)
 		if err == nil {
-			stateMu.Lock()
-			currentState = &ts
-			stateMu.Unlock()
+
+			testStateMu.Lock()
+			currentTestState = &test
+			testStateMu.Unlock()
+
+			chaosMu.Lock()
+			currentChaos = chaos.Config{
+				Enabled:    test.ChaosConfig.Enabled,
+				LatencyMs:  test.ChaosConfig.LatencyMs,
+				ErrorRate:  test.ChaosConfig.ErrorRate,
+				BurstPause: test.ChaosConfig.BurstPause,
+			}
+			chaosMu.Unlock()
 		}
+
 		time.Sleep(5 * time.Second)
 	}
 }
