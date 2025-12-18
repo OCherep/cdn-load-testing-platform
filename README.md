@@ -125,7 +125,7 @@ GET /tests/{</span><span>id</span><span>}/report.pdf
 
 # 🏁 ПІДСУМОК
 
-Ти зараз маєш **повноцінну платформу рівня**:
+Зараз маємо **повноцінну платформу рівня**:
 
 * internal CDN QA
 * ISP / Telco
