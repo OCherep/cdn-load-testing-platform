@@ -15,6 +15,7 @@ import (
 	"cdn-load-platform/internal/chaos"
 	"cdn-load-platform/internal/cost"
 	"cdn-load-platform/internal/report"
+	"cdn-load-platform/internal/sla"
 	"cdn-load-platform/internal/state"
 )
 
@@ -294,6 +295,19 @@ func main() {
 				"-var", "test_id="+testID,
 				"-var", "nodes="+fmt.Sprint(d.ScaleNodes),
 			).Run()
+		},
+	)
+
+	go sla.Monitor(
+		store,
+		func(e report.SLAEvidence) {
+			store.MarkSLABreached(e.TestID)
+
+			// Option A: Auto scale (safe)
+			store.UpdateNodes(e.TestID, store.GetNodes(e.TestID)+1)
+
+			// Option B: Auto stop (hard SLA)
+			// store.UpdateStatus(e.TestID, "FAILED")
 		},
 	)
 
