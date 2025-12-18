@@ -1,0 +1,5 @@
+{
+  "name": "stress",
+  "url": "http://cdn.example.com/test.m3u8",
+  "sessions": 10000
+}

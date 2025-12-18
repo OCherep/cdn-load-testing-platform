@@ -1,0 +1,25 @@
+{
+  "stages": [
+    {
+      "after_sec": 60,
+      "enabled": true,
+      "latency_ms": 200,
+      "error_rate": 0,
+      "burst_pause": false
+    },
+    {
+      "after_sec": 180,
+      "enabled": true,
+      "latency_ms": 400,
+      "error_rate": 5,
+      "burst_pause": true
+    },
+    {
+      "after_sec": 360,
+      "enabled": false,
+      "latency_ms": 0,
+      "error_rate": 0,
+      "burst_pause": false
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "title": "CDN Geo / Edge Latency",
+  "panels": [
+    {
+      "type": "graph",
+      "title": "Latency per Region",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(cdn_latency_ms_bucket[1m])) by (le, region))"
+        }
+      ]
+    },
+    {
+      "type": "graph",
+      "title": "Latency per Edge",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(cdn_latency_ms_bucket[1m])) by (le, edge))"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+FROM node:20
+WORKDIR /app
+COPY ui .
+RUN npm install && npm run build
+CMD ["npm","run","preview"]

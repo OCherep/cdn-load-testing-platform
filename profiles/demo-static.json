@@ -1,0 +1,8 @@
+{
+  "name": "Static CDN Demo",
+  "target_url": "https://cdn.example.com/static/video.mp4",
+  "min_rps": 50,
+  "max_rps": 2000,
+  "step": 50,
+  "tokenized": false
+}

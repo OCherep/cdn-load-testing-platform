@@ -1,0 +1,14 @@
+{
+  "title": "CDN Edge Latency",
+  "panels": [
+    {
+      "type": "heatmap",
+      "title": "Latency per Edge",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(cdn_edge_latency_ms_bucket[1m])) by (le, edge))"
+        }
+      ]
+    }
+  ]
+}

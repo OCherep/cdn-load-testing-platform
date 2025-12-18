@@ -1,0 +1,6 @@
+{
+  "name": "stress",
+  "sessions": 10000,
+  "ramp_up_sec": 10,
+  "duration_sec": 300
+}
