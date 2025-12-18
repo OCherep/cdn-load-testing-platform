@@ -88,10 +88,10 @@ fi
 docker-compose version
 
 # -------------------------------------------------
-# 4. TERRAFORM >= 1.5 (SAFE, IDEMPOTENT)
+# 4. TERRAFORM >= 1.5 (AMAZON LINUX SAFE)
 # -------------------------------------------------
-if command -v terraform >/dev/null 2>&1; then
-  echo "✔ Terraform already installed: $(terraform version | head -n1)"
+if /usr/bin/terraform version >/dev/null 2>&1; then
+  echo "✔ Terraform already installed: $(/usr/bin/terraform version | head -n1)"
 else
   echo "🏗 Installing Terraform"
 
@@ -104,12 +104,15 @@ else
 
   unzip -q "${TMP_DIR}/terraform.zip" -d "${TMP_DIR}"
 
-  sudo install -m 0755 "${TMP_DIR}/terraform" /usr/local/bin/terraform
+  sudo install -m 0755 "${TMP_DIR}/terraform" /usr/bin/terraform
 
   rm -rf "${TMP_DIR}"
 
-  echo "✔ Terraform installed: $(terraform version | head -n1)"
+  echo "✔ Terraform installed: $(/usr/bin/terraform version | head -n1)"
 fi
+
+# Make terraform available in current shell
+export PATH="/usr/bin:$PATH"
 
 
 terraform version
