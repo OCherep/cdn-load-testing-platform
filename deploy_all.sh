@@ -88,17 +88,29 @@ fi
 docker-compose version
 
 # -------------------------------------------------
-# 4. TERRAFORM >= 1.5
+# 4. TERRAFORM >= 1.5 (SAFE, IDEMPOTENT)
 # -------------------------------------------------
-if ! command -v terraform >/dev/null 2>&1; then
+if command -v terraform >/dev/null 2>&1; then
+  echo "✔ Terraform already installed: $(terraform version | head -n1)"
+else
   echo "🏗 Installing Terraform"
 
   TF_VERSION="1.6.6"
-  curl -LO "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
-  unzip terraform_${TF_VERSION}_linux_amd64.zip
-  sudo mv terraform /usr/local/bin/
-  rm terraform_${TF_VERSION}_linux_amd64.zip
+  TMP_DIR=$(mktemp -d)
+
+  curl -fsSL \
+    "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip" \
+    -o "${TMP_DIR}/terraform.zip"
+
+  unzip -q "${TMP_DIR}/terraform.zip" -d "${TMP_DIR}"
+
+  sudo install -m 0755 "${TMP_DIR}/terraform" /usr/local/bin/terraform
+
+  rm -rf "${TMP_DIR}"
+
+  echo "✔ Terraform installed: $(terraform version | head -n1)"
 fi
+
 
 terraform version
 
