@@ -1,112 +1,90 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-### ================================
-### CONFIG
-### ================================
-AWS_PROFILE=${AWS_PROFILE:-cdn-load}
-AWS_REGION=${AWS_REGION:-eu-central-1}
+echo "🚀 CDN Load Testing Platform – FULL BOOTSTRAP"
 
-CONTROLLER_IMAGE=cdn-load-controller
-AGENT_IMAGE=cdn-load-agent
+# -------------------------------------------------
+# 0. OS CHECK
+# -------------------------------------------------
+if [ ! -f /etc/os-release ]; then
+  echo "❌ Unsupported OS"
+  exit 1
+fi
 
-ROOT_DIR=$(pwd)
+source /etc/os-release
+echo "🖥 OS detected: $PRETTY_NAME"
 
-echo "🚀 CDN Load Platform – ONE CLICK DEPLOY"
-echo "AWS_PROFILE=$AWS_PROFILE"
-echo "AWS_REGION=$AWS_REGION"
-echo
+# -------------------------------------------------
+# 1. INSTALL PREREQUISITES
+# -------------------------------------------------
+echo "📦 Installing prerequisites..."
 
-### ================================
-### PREREQUISITES
-### ================================
-echo "🔍 Checking dependencies..."
+sudo apt-get update -y
+sudo apt-get install -y \
+  ca-certificates \
+  curl \
+  unzip \
+  gnupg \
+  lsb-release \
+  jq
 
-for cmd in aws docker terraform go; do
-  if ! command -v $cmd >/dev/null 2>&1; then
-    echo "❌ Missing dependency: $cmd"
-    exit 1
-  fi
-done
+# ---- Docker ----
+if ! command -v docker >/dev/null; then
+  echo "🐳 Installing Docker"
+  curl -fsSL https://get.docker.com | sudo sh
+  sudo usermod -aG docker $USER
+fi
 
-aws sts get-caller-identity --profile $AWS_PROFILE >/dev/null \
-  || { echo "❌ AWS auth failed"; exit 1; }
+# ---- Docker Compose ----
+if ! command -v docker-compose >/dev/null; then
+  echo "🐳 Installing Docker Compose"
+  sudo curl -L \
+    "https://github.com/docker/compose/releases/download/v2.25.0/docker-compose-$(uname -s)-$(uname -m)" \
+    -o /usr/local/bin/docker-compose
+  sudo chmod +x /usr/local/bin/docker-compose
+fi
 
-echo "✅ Dependencies OK"
-echo
+# ---- Terraform >= 1.5 ----
+if ! command -v terraform >/dev/null; then
+  echo "🏗 Installing Terraform"
+  curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp.gpg
+  echo "deb [signed-by=/usr/share/keyrings/hashicorp.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+    | sudo tee /etc/apt/sources.list.d/hashicorp.list
+  sudo apt-get update && sudo apt-get install terraform -y
+fi
 
-### ================================
-### DOCKER BUILD
-### ================================
-echo "🐳 Building Docker images..."
+terraform version
 
-docker build -t $AGENT_IMAGE -f docker/agent.Dockerfile .
-docker build -t $CONTROLLER_IMAGE -f docker/controller.Dockerfile .
+# -------------------------------------------------
+# 2. AWS ENV
+# -------------------------------------------------
+export AWS_REGION=${AWS_REGION:-eu-central-1}
+export AWS_PROFILE=${AWS_PROFILE:-cdn-load}
 
-echo "✅ Docker images built"
-echo
+echo "☁️ AWS_REGION=$AWS_REGION"
 
-### ================================
-### TERRAFORM: S3 + DYNAMO
-### ================================
-echo "🗄️  Deploying S3 + DynamoDB..."
+# -------------------------------------------------
+# 3. INFRASTRUCTURE
+# -------------------------------------------------
+echo "🧱 Deploying infrastructure"
 
-cd terraform/s3
-terraform init -input=false
-terraform apply -auto-approve \
-  -var "aws_region=$AWS_REGION"
+terraform -chdir=terraform/s3 init
+terraform -chdir=terraform/s3 apply -auto-approve
 
-cd "$ROOT_DIR"
+terraform -chdir=terraform/controller init
+terraform -chdir=terraform/controller apply -auto-approve
 
-### ================================
-### TERRAFORM: CONTROLLER
-### ================================
-echo "🎛️  Deploying Controller..."
+terraform -chdir=terraform/load-nodes init
+terraform -chdir=terraform/load-nodes apply -auto-approve
 
-cd terraform/controller
-terraform init -input=false
-terraform apply -auto-approve \
-  -var "aws_region=$AWS_REGION" \
-  -var "controller_image=$CONTROLLER_IMAGE"
+# -------------------------------------------------
+# 4. OBSERVABILITY
+# -------------------------------------------------
+echo "📊 Starting Prometheus + Grafana"
+docker compose up -d prometheus grafana
 
-cd "$ROOT_DIR"
-
-### ================================
-### TERRAFORM: LOAD NODES (IDLE)
-### ================================
-echo "⚙️  Preparing Load Nodes module..."
-
-cd terraform/load-nodes
-terraform init -input=false
-
-cd "$ROOT_DIR"
-
-### ================================
-### GRAFANA
-### ================================
-echo "📊 Starting Grafana with provisioning..."
-
-docker rm -f grafana-cdn-load >/dev/null 2>&1 || true
-
-docker run -d \
-  --name grafana-cdn-load \
-  -p 3000:3000 \
-  -v "$ROOT_DIR/grafana/provisioning:/etc/grafana/provisioning" \
-  -v "$ROOT_DIR/grafana/dashboards:/var/lib/grafana/dashboards" \
-  grafana/grafana:latest
-
-
-echo
-echo "======================================"
-echo "✅ DEPLOYMENT COMPLETE"
-echo "======================================"
-echo
-echo "Controller API : http://<controller_public_ip>:8080"
-echo "Grafana UI     : http://localhost:3000"
-echo "Grafana login  : admin / admin"
-echo
-echo "👉 NEXT STEPS:"
-echo "1. POST /auth/login"
-echo "2. POST /tests"
-echo "3. POST /tests/:id/start"
-echo
+# -------------------------------------------------
+# 5. DONE
+# -------------------------------------------------
+echo "✅ Platform ready"
+echo "➡️ Grafana: http://localhost:3000 (admin/admin)"

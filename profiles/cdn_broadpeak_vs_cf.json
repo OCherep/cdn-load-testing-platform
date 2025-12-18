@@ -1,0 +1,19 @@
+{
+  "target_urls": [
+    {
+      "name": "broadpeak-ks",
+      "url": "https://cdn-ks.kyivstar.ua/Content/HLS/Live/channel(ch0005)/index.m3u8"
+    },
+    {
+      "name": "broadpeak-ks4",
+      "url": "https://cdn-ks4.kyivstar.ua/Content/HLS/Live/channel(ch0005)/index.m3u8"
+    },
+    {
+      "name": "cloudfront",
+      "url": "https://dxxxxxxxx.cloudfront.net/Content/HLS/Live/channel(ch0005)/index.m3u8"
+    }
+  ],
+  "min_rps": 50,
+  "max_rps": 1500,
+  "step": 50
+}
