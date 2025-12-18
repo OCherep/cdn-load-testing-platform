@@ -251,22 +251,30 @@ func main() {
 			return
 		}
 
-		metrics := store.GetMetricsSnapshot(testID)
+		snapshot := store.GetMetricsSnapshot(testID)
+		test, _ := store.Get(testID)
 
 		evidence := report.SLAEvidence{
-			TestID:          testID,
-			TargetURL:       test.TargetURL,
-			StartTime:       time.Unix(test.StartedAt, 0),
-			EndTime:         time.Now(),
-			AvgLatencyMs:    metrics.AvgLatency,
-			P95LatencyMs:    metrics.P95Latency,
-			ErrorRate:       metrics.ErrorRate,
-			StickinessRatio: metrics.StickinessRatio,
+			TestID:    testID,
+			TargetURL: "https://example.cdn.com",
+			StartTime: time.Unix(test.StartedAt, 0),
+			EndTime:   time.Now(),
 
-			LatencySLAms:  200,
-			ErrorRateSLA:  0.01,
-			StickinessSLA: 0.90,
+			AvgLatencyMs:    snapshot.AvgLatency,
+			P95LatencyMs:    snapshot.P95Latency,
+			ErrorRate:       snapshot.ErrorRate,
+			StickinessRatio: snapshot.StickinessRatio,
+
+			LatencySLAms:  test.SLA.LatencyMs,
+			ErrorRateSLA:  test.SLA.ErrorRate,
+			StickinessSLA: test.SLA.Stickiness,
 		}
+
+		file, err := report.ExportSLAEvidencePDF(evidence)
+		if err != nil {
+			log.Println("PDF export failed:", err)
+		}
+		log.Println("SLA Evidence saved:", file)
 
 		file, err := report.ExportSLAEvidencePDF(evidence)
 		if err != nil {
