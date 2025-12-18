@@ -13,6 +13,7 @@ import (
 	"cdn-load-platform/internal/auth"
 	"cdn-load-platform/internal/chaos"
 	"cdn-load-platform/internal/cost"
+	"cdn-load-platform/internal/report"
 	"cdn-load-platform/internal/state"
 )
 
@@ -232,6 +233,43 @@ func main() {
 			time.Sleep(1 * time.Second)
 			ws.WriteJSON(gin.H{"status": "alive"})
 		}
+	})
+
+	api.POST("/:id/report", func(c *gin.Context) {
+		testID := c.Param("id")
+
+		test, err := store.Get(testID)
+		if err != nil {
+			c.JSON(404, gin.H{"error": "test not found"})
+			return
+		}
+
+		metrics := store.GetMetricsSnapshot(testID)
+
+		evidence := report.SLAEvidence{
+			TestID:          testID,
+			TargetURL:       test.TargetURL,
+			StartTime:       time.Unix(test.StartedAt, 0),
+			EndTime:         time.Now(),
+			AvgLatencyMs:    metrics.AvgLatency,
+			P95LatencyMs:    metrics.P95Latency,
+			ErrorRate:       metrics.ErrorRate,
+			StickinessRatio: metrics.StickinessRatio,
+
+			LatencySLAms:  200,
+			ErrorRateSLA:  0.01,
+			StickinessSLA: 0.90,
+		}
+
+		file, err := report.ExportSLAEvidencePDF(evidence)
+		if err != nil {
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(200, gin.H{
+			"file": file,
+		})
 	})
 
 	log.Println("[controller] listening on :8080")
