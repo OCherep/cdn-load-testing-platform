@@ -151,9 +151,29 @@ aws sts get-caller-identity || {
 #
 # terraform -chdir=terraform/load-nodes init
 # terraform -chdir=terraform/load-nodes apply -auto-approve
-echo "🧱 Deploying infrastructure (single Terraform root)"
-terraform -chdir=terraform init
-terraform -chdir=terraform apply -auto-approve
+echo "🧱 Deploying Terraform infrastructure"
+
+set -e
+
+TF_DIRS=(
+  "terraform/state-store"
+  "terraform/s3"
+  "terraform/load-nodes"
+)
+
+for dir in "${TF_DIRS[@]}"; do
+  echo "➡️ Terraform apply in $dir"
+
+  if [ ! -d "$dir" ]; then
+    echo "❌ Directory $dir not found"
+    exit 1
+  fi
+
+  terraform -chdir="$dir" init -upgrade
+  terraform -chdir="$dir" apply -auto-approve
+done
+
+echo "✅ Terraform infrastructure deployed"
 
 # -------------------------------------------------
 # 7. OBSERVABILITY
