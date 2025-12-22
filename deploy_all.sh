@@ -180,9 +180,7 @@ echo "✅ Terraform infrastructure deployed"
 # -------------------------------------------------
 echo "📊 Starting Prometheus & Grafana"
 
-docker compose \
-  -f docker/docker-compose.monitoring.yml \
-  up -d
+docker compose -f docker/docker-compose.monitoring.yml up -d
 
 
 # -------------------------------------------------
