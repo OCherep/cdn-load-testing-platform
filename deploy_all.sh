@@ -141,16 +141,19 @@ aws sts get-caller-identity || {
 # -------------------------------------------------
 # 6. INFRASTRUCTURE DEPLOY
 # -------------------------------------------------
-echo "🧱 Deploying infrastructure"
-
-terraform -chdir=terraform/s3 init
-terraform -chdir=terraform/s3 apply -auto-approve
-
-terraform -chdir=terraform/controller init
-terraform -chdir=terraform/controller apply -auto-approve
-
-terraform -chdir=terraform/load-nodes init
-terraform -chdir=terraform/load-nodes apply -auto-approve
+# echo "🧱 Deploying infrastructure"
+#
+# terraform -chdir=terraform/s3 init
+# terraform -chdir=terraform/s3 apply -auto-approve
+#
+# terraform -chdir=terraform/controller init
+# terraform -chdir=terraform/controller apply -auto-approve
+#
+# terraform -chdir=terraform/load-nodes init
+# terraform -chdir=terraform/load-nodes apply -auto-approve
+echo "🧱 Deploying infrastructure (single Terraform root)"
+terraform -chdir=terraform init
+terraform -chdir=terraform apply -auto-approve
 
 # -------------------------------------------------
 # 7. OBSERVABILITY
