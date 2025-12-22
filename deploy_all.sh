@@ -120,11 +120,20 @@ terraform version
 # -------------------------------------------------
 # 5. AWS ENV
 # -------------------------------------------------
+# export AWS_REGION=${AWS_REGION:-eu-central-1}
+# export AWS_PROFILE=${AWS_PROFILE:-default}
+#
+# echo "☁️ AWS_REGION=$AWS_REGION"
+# aws sts get-caller-identity >/dev/null || {
+#   echo "❌ AWS credentials not available (IAM role missing?)"
+#   exit 1
+#}
+# AWS
+unset AWS_PROFILE
 export AWS_REGION=${AWS_REGION:-eu-central-1}
-export AWS_PROFILE=${AWS_PROFILE:-default}
 
 echo "☁️ AWS_REGION=$AWS_REGION"
-aws sts get-caller-identity >/dev/null || {
+aws sts get-caller-identity || {
   echo "❌ AWS credentials not available (IAM role missing?)"
   exit 1
 }
